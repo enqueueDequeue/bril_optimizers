@@ -4,6 +4,7 @@
   a = add a b;
   a_1: int = const 4;
   a_2: int = const 5;
+  a_2: int = const 6;
   print a;
   print a_1;
   print a_2;

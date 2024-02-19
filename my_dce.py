@@ -143,8 +143,6 @@ def unblockify(block: dict) -> list:
   return func_insts
 
 
-# todo: this is not perfect, any symbols with
-#       name collisions will cause issues
 def get_arg_name(arg: str, counter: int) -> str:
   if 1 == counter:
     return arg
@@ -152,9 +150,21 @@ def get_arg_name(arg: str, counter: int) -> str:
     return f'{arg}_{counter}'
 
 
-def block_rename(insts: list) -> list:
+def counter_inc_to_avoid_collision(arg: str, counter: int, all_args: list) -> int:
+  while True:
+    counter = counter + 1
+    name = get_arg_name(arg, counter)
+
+    if name not in all_args:
+      return counter
+
+
+def func_var_rename(insts: list, args: list) -> list:
   renamed_insts = []
   dest_counter = {}
+  all_args = []
+
+  all_args.extend(args)
 
   for inst in insts:
     inst = inst.copy()
@@ -182,9 +192,17 @@ def block_rename(insts: list) -> list:
         assert "type" in inst.keys()
         counter, dest_type = (0, inst["type"])
 
-      counter = counter + 1
+      # simple +1 would be enough
+      # But, if the source code has <var> and <var>_2 in it's names
+      # then this will break. So, using the fancy counter
+      # counter = counter + 1
 
-      inst["dest"] = get_arg_name(dest, counter)
+      counter = counter_inc_to_avoid_collision(dest, counter, all_args)
+
+      new_dest = get_arg_name(dest, counter)
+
+      inst["dest"] = new_dest
+      all_args.append(new_dest)
 
       if "type" not in inst.keys():
         inst["type"] = dest_type
@@ -196,9 +214,9 @@ def block_rename(insts: list) -> list:
   return renamed_insts
 
 
-def dce_insts(input_insts: list) -> list:
+def dce_insts(input_insts: list, args: list) -> list:
   insts = []
-  insts.extend(block_rename(input_insts))
+  insts.extend(func_var_rename(input_insts, args))
 
   while True:
     dce_insts = []
@@ -251,7 +269,7 @@ def dce(program: dict) -> dict:
       if label.startswith(ACTUAL_BLOCK_NAME_PERFIX):
         dce_blocks[label] = insts
 
-    new_function["instrs"] = dce_insts(unblockify(dce_blocks))
+    new_function["instrs"] = dce_insts(unblockify(dce_blocks), [ arg["name"] for arg in ([] if "args" not in function.keys() else function["args"]) ])
     new_function["name"] = function["name"]
 
     if "args" in function.keys():
