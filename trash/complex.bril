@@ -1,0 +1,19 @@
+@fun(a: int) {
+  c: int = id a;
+  d: int = id c;
+  e: int = id d;
+  f: int = add d e;
+  g: int = add d e;
+  g = mul f g;
+  h: int = add f g;
+  i: int = add f g;
+  print f;
+  print g;
+  print h;
+  print i;
+}
+
+@main {
+  a: int = const 100;
+  call @fun a;
+}
