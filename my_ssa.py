@@ -24,7 +24,7 @@ def gen_rand_name() -> str:
 
 
 def get_block_name(label: str) -> str:
-  return label
+  return f'{label}'
 
 
 def blockify(insts: list, func: str) -> dict:
@@ -106,136 +106,141 @@ def build_cfg(blocks: dict) -> dict:
   return cfg
 
 
-def find_dominators(node: str, cfg: dict, strict_dominators: set) -> str:
-  prev_node = None
-  current_node = node
-
-  dominator = None
-
-  seen = set()
-
-  while prev_node != current_node:
-    # print(f'{current_node}')
-    pred = current_node
-
-    if current_node in seen:
-      break
-
-    if 0 != len(cfg[current_node].predecessors):
-      found = False
-
-      for pred in cfg[current_node].predecessors:
-        if pred in strict_dominators:
-          dominator = pred
-          found = True
-
-      if found:
-        break
-
-    seen.add(current_node)
-
-    prev_node = current_node
-    current_node = pred
-
-  return dominator
+def get_arg_name(arg: str, counter: int) -> str:
+  return f'{arg}_{counter}'
 
 
-def build_dom(blocks: dict, cfg: dict) -> None:
-  # block_label -> (dominators)
-  dom = {}
-  current_dom = {}
+def update_state(dest: str, state: dict, current_block_state: dict) -> int:
+  count = 0
 
-  # initialize dom with all blocks for each block
-  all_blocks = set()
+  if dest in state.keys():
+    count = state[dest] + 1
 
-  for (label, _) in blocks.items():
-    all_blocks.add(label)
+  state[dest] = count
 
-  for (label, _) in blocks.items():
-    current_dom[label] = set(all_blocks)
+  if current_block_state is not None:
+    current_block_state[dest] = count
 
-  while dom != current_dom:
-    dom = {}
-
-    for (node_label, dominators) in current_dom.items():
-      dom[node_label] = set(dominators)
-
-    for (node_label, node) in cfg.items():
-      dom_entry = set()
-
-      # get the union of all preds
-      for pred in node.predecessors:
-        dom_entry = dom_entry.union(current_dom[pred])
-
-      # now get the intersection
-      for pred in node.predecessors:
-        dom_entry = dom_entry.intersection(current_dom[pred])
-
-      dom_entry.add(node_label)
-
-      current_dom[node_label] = dom_entry
-
-  print('')
-  print('dominators:')
-
-  # printing the dominators of each block
-  for (master, slaves) in dom.items():
-    slaves = list(slaves)
-    slaves.sort()
-
-    print(f'{master}: \t\t{", ".join(slaves)}')
-
-  print('')
-  print('dominance tree:')
-
-  # building the dominator tree
-  dom_tree = {}
-
-  for (node_label, dominators) in dom.items():
-    strict_dominators = set(dominators)
-
-    strict_dominators.remove(node_label)
-
-    dom_tree[node_label] = find_dominators(node_label, cfg, strict_dominators)
-
-  for (node, dominator) in dom_tree.items():
-    print(f'{node}: \t\t{dominator}')
-
-  print('')
-  print('dominance frontier:')
-
-  # building the dominance frontier
-  dom_frontier = {}
-
-  for (node_label, dominators) in dom.items():
-
-    frontier = []
-
-    for succ in cfg[node_label].successors:
-      strict_dominators = set(dom[succ])
-
-      strict_dominators.remove(succ)
-
-      if node_label != find_dominators(succ, cfg, strict_dominators):
-        frontier.append(succ)
-
-    dom_frontier[node_label] = frontier
-
-  for (node, frontier) in dom_frontier.items():
-    print(f'{node}: \t\t{frontier}')
+  return count
 
 
-def build_dom_tree(program: dict) -> None:
+def convert_blocks_to_ssa(entry_block: str, blocks: dict, cfg: dict,
+                          state: dict = {}, block_states: dict = {},
+                          out_blocks: dict = {}, ssa_sarted: list = [],
+                          ssa_completed: list = []) -> dict:
+
+  modified_insts = []
+
+  # variable name -> [count]
+  current_block_state = {}
+
+  for predecessor in cfg[entry_block].predecessors:
+    if predecessor not in block_states.keys():
+      continue
+
+    # variable and it's count
+    pred_block_state = block_states[predecessor]
+
+    for (var_name, count) in pred_block_state.items():
+      if var_name in current_block_state.keys():
+        # phi node is needed for this
+        current_block_state[var_name].append(count)
+      else:
+        current_block_state[var_name] = [ count ]
+
+  for (var_name, counters) in current_block_state.items():
+    assert (0 != len(counters))
+
+    if 1 != len(counters):
+      # insert the phi node
+      # todo: insert the phi node correctly
+      # and get the type information correctly
+      modified_insts.append(None)
+
+      count = update_state(var_name, state)
+      current_block_state[var_name] = [ count ]
+
+  for inst in blocks[entry_block]:
+    if "args" in inst.keys():
+      new_args = []
+
+      for arg in inst["args"]:
+        if arg not in current_block_state.keys():
+          # maybe this is the function argument
+          # So, do not rename
+          new_args.append(arg)
+        else:
+          counter = current_block_state[arg]
+          new_args.append(get_arg_name(arg, counter))
+
+      inst["args"] = new_args
+
+    if "dest" in inst.keys():
+      dest = inst["dest"]
+      count = update_state(dest, state, current_block_state)
+      inst["dest"] = get_arg_name(dest, count)
+
+    modified_insts.append(inst)
+
+  ssa_sarted.append(entry_block)
+
+  all_predecessors_ssa_ed = True
+
+  for predecessor in cfg[entry_block].predecessors:
+    if predecessor not in ssa_sarted:
+      all_predecessors_ssa_ed = False
+
+  if all_predecessors_ssa_ed:
+    ssa_completed.append(entry_block)
+    out_blocks[entry_block] = modified_insts
+
+  for successor in cfg[entry_block].successors:
+    if successor not in ssa_completed:
+      convert_blocks_to_ssa(successor, blocks, cfg, state, block_states, out_blocks, ssa_completed)
+
+  return out_blocks
+
+
+def convert_to_ssa(program: dict) -> dict:
+  # make the blocks
+  new_program = {}
+  new_functions = []  
+
   for function in program["functions"]:
-    blocks = blockify(function["instrs"], function["name"])
+    new_function = {}
+    instrs = function["instrs"]
+    func_name = function["name"]
+    blocks = blockify(instrs, func_name)
     cfg = build_cfg(blocks)
 
     for (node_label, node) in cfg.items():
       print(f'{node_label}  <- ({node.predecessors}) -> ({node.successors})')
 
-    print("")
+    modified_blocks = convert_blocks_to_ssa(func_name, blocks, cfg)
 
-    build_dom(blocks, cfg)
+    # print('----------------------------')
+
+    modified_instrs = []
+
+    for (block_label, _) in blocks.items():
+      block_insts = modified_blocks[block_label]
+
+      modified_instrs.extend(block_insts)
+
+    new_function["instrs"] = modified_instrs
+    new_function["name"] = func_name
+
+    if "args" in function.keys():
+      new_function["args"] = function["args"]
+
+    if "type" in function.keys():
+      new_function["type"] = function["type"]
+
+    new_functions.append(new_function)
+
+  new_program["functions"] = new_functions
+
+  return new_program
 
 
 if __name__ == "__main__":
@@ -247,4 +252,4 @@ if __name__ == "__main__":
 
   with open(sys.argv[1]) as source:
     program = json.load(source)
-    build_dom_tree(program)
+    print(json.dumps(convert_to_ssa(program)))
